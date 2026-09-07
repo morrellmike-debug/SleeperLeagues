@@ -214,6 +214,8 @@ def build_board_data(cfg: LeagueConfig, resolve_all_rosters: bool = True) -> Boa
         my_active_players = _resolve_players(active_ids, players)
         my_taxi_players = _resolve_players(list(taxi_ids), players)
         my_ir_players = _resolve_players(list(reserve_ids), players)
+        for p in my_taxi_players + my_ir_players:
+            _apply_value_fields(p, dynasty_values, values_are_real, idp_rankings)
 
         for p in my_active_players:
             _apply_value_fields(p, dynasty_values, values_are_real, idp_rankings)
