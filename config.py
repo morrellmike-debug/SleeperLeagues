@@ -65,10 +65,20 @@ PLAYERS_CACHE_MAX_AGE_HOURS = 24
 DYNASTY_VALUES_CACHE_PATH = f"{CACHE_DIR}/dynasty_values.json"
 DYNASTY_VALUES_CACHE_MAX_AGE_HOURS = 24
 
-# DynastyProcess publishes a free, regularly-updated CSV of dynasty trade
-# values keyed by sleeper_id. If this ever 404s (repo path changed), the
+# DynastyProcess publishes free, regularly-updated dynasty data as CSVs on
+# GitHub. Use raw.githubusercontent.com directly - the github.com/.../raw/
+# redirect form 403s (GitHub blocks it for automated requests), while the
+# raw host serves the file straight up.
+#
+# values-players.csv has trade values keyed by fp_id (FantasyPros' own
+# player id), NOT sleeper_id. db_playerids.csv is a separate crosswalk file
+# with both fantasypros_id and sleeper_id, so we join the two to get a
+# sleeper_id -> value mapping. If either file's schema changes or 404s, the
 # code falls back to a simple position/status tiering and flags the ranking
 # as approximate rather than crashing.
 DYNASTY_PROCESS_VALUES_URL = (
-    "https://github.com/dynastyprocess/data/raw/master/files/values-players.csv"
+    "https://raw.githubusercontent.com/dynastyprocess/data/master/files/values-players.csv"
+)
+DYNASTY_PROCESS_PLAYERIDS_URL = (
+    "https://raw.githubusercontent.com/dynastyprocess/data/master/files/db_playerids.csv"
 )

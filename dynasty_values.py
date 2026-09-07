@@ -20,6 +20,7 @@ import requests
 
 from config import (
     CACHE_DIR,
+    DYNASTY_PROCESS_PLAYERIDS_URL,
     DYNASTY_PROCESS_VALUES_URL,
     DYNASTY_VALUES_CACHE_MAX_AGE_HOURS,
     DYNASTY_VALUES_CACHE_PATH,
@@ -51,45 +52,75 @@ def fetch_dynasty_values(force_refresh: bool = False) -> tuple[dict[str, float],
                     return cached, True
 
     try:
-        resp = requests.get(DYNASTY_PROCESS_VALUES_URL, timeout=30)
-        resp.raise_for_status()
-        reader = csv.DictReader(io.StringIO(resp.text))
-        fieldnames = reader.fieldnames or []
+        values_resp = requests.get(DYNASTY_PROCESS_VALUES_URL, timeout=30)
+        values_resp.raise_for_status()
+        values_reader = csv.DictReader(io.StringIO(values_resp.text))
+        values_fields = values_reader.fieldnames or []
 
-        id_col = _find_column(fieldnames, "sleeper", "id")
-        # Prefer a 1QB superflex-agnostic overall value column; fall back to
-        # whatever "value" column exists.
+        # values-players.csv is keyed by fp_id (FantasyPros' own id), not
+        # sleeper_id - it has no sleeper_id column at all. Try a direct
+        # sleeper_id column first in case DynastyProcess adds one later;
+        # otherwise join through db_playerids.csv below.
+        direct_sleeper_col = _find_column(values_fields, "sleeper", "id")
+        fp_id_col = _find_column(values_fields, "fp_id") or _find_column(values_fields, "fantasypros", "id")
         value_col = (
-            _find_column(fieldnames, "value_1qb")
-            or _find_column(fieldnames, "value_2qb")
-            or _find_column(fieldnames, "value")
+            _find_column(values_fields, "value_1qb")
+            or _find_column(values_fields, "value_2qb")
+            or _find_column(values_fields, "value")
         )
 
-        if not id_col or not value_col:
-            print(
-                f"WARNING: could not find expected columns in DynastyProcess CSV "
-                f"(saw: {fieldnames}). Falling back to tiering."
-            )
+        if not value_col:
+            print(f"WARNING: no value column found in DynastyProcess values CSV (saw: {values_fields}). Falling back to tiering.")
             return {}, False
 
-        values: dict[str, float] = {}
-        for row in reader:
-            sid = (row.get(id_col) or "").strip()
+        fp_id_to_value: dict[str, float] = {}
+        sleeper_id_to_value: dict[str, float] = {}
+        for row in values_reader:
             raw_val = (row.get(value_col) or "").strip()
-            if not sid or not raw_val:
+            if not raw_val:
                 continue
             try:
-                values[sid] = float(raw_val)
+                val = float(raw_val)
             except ValueError:
                 continue
 
-        if not values:
-            print("WARNING: DynastyProcess CSV parsed but yielded no usable rows. Falling back to tiering.")
+            if direct_sleeper_col:
+                sid = (row.get(direct_sleeper_col) or "").strip()
+                if sid:
+                    sleeper_id_to_value[sid] = val
+            if fp_id_col:
+                fpid = (row.get(fp_id_col) or "").strip()
+                if fpid:
+                    fp_id_to_value[fpid] = val
+
+        if not sleeper_id_to_value and fp_id_to_value:
+            # Join through the id crosswalk file: fantasypros_id -> sleeper_id
+            ids_resp = requests.get(DYNASTY_PROCESS_PLAYERIDS_URL, timeout=30)
+            ids_resp.raise_for_status()
+            ids_reader = csv.DictReader(io.StringIO(ids_resp.text))
+            ids_fields = ids_reader.fieldnames or []
+            fp_col = _find_column(ids_fields, "fantasypros", "id")
+            sleeper_col = _find_column(ids_fields, "sleeper", "id")
+
+            if not fp_col or not sleeper_col:
+                print(f"WARNING: could not find id columns in db_playerids.csv (saw: {ids_fields}). Falling back to tiering.")
+                return {}, False
+
+            for row in ids_reader:
+                fpid = (row.get(fp_col) or "").strip()
+                sid = (row.get(sleeper_col) or "").strip()
+                if not fpid or not sid or fpid.upper() == "NA" or sid.upper() == "NA":
+                    continue
+                if fpid in fp_id_to_value:
+                    sleeper_id_to_value[sid] = fp_id_to_value[fpid]
+
+        if not sleeper_id_to_value:
+            print("WARNING: DynastyProcess data parsed but yielded no sleeper_id-keyed values. Falling back to tiering.")
             return {}, False
 
         with open(DYNASTY_VALUES_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(values, f)
-        return values, True
+            json.dump(sleeper_id_to_value, f)
+        return sleeper_id_to_value, True
 
     except Exception as exc:  # network error, bad CSV, etc - never crash the board build
         print(f"WARNING: dynasty value fetch failed ({exc}). Falling back to tiering.")
