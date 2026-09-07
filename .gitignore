@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+cache/
+board.html
+live_state.json
