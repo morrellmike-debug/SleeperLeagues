@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import sleeper_api
 from config import LeagueConfig, MY_USER_ID
 from dynasty_values import fallback_tier_score, fetch_dynasty_values
+from fantasypros import fetch_idp_rankings
 
 # Position groups we roll IDP eligibility up into for limit-checking.
 POSITION_GROUPS = ["QB", "RB", "WR", "TE", "K", "DL", "LB", "DB"]
@@ -29,6 +30,7 @@ class BoardData:
     departed_orphan_roster_ids: set[int]  # prior-league rosters with owner_id None
     pool: list[dict]  # dispersal pool players, with dynasty_value + rank
     dynasty_values_are_real: bool
+    idp_rankings_are_real: bool
     my_roster_id: int | None
     my_active_players: list[dict]
     my_taxi_players: list[dict]
@@ -109,14 +111,44 @@ def _resolve_players(player_ids: list[str], players: dict) -> list[dict]:
     return [sleeper_api.player_lookup(pid, players) for pid in player_ids if pid]
 
 
-def _score_player(p: dict, dynasty_values: dict[str, float], values_are_real: bool) -> float:
-    """Lower score = better/higher-ranked."""
-    if values_are_real and p["player_id"] in dynasty_values:
-        # Real values are "bigger is better" - invert so lower is still better,
-        # keeping cut_candidates (ascending sort) and pool ranking (also
-        # ascending) consistent regardless of data source.
-        return -dynasty_values[p["player_id"]]
-    return 1_000_000 + fallback_tier_score(p.get("position"), p.get("status"))
+def _apply_value_fields(p: dict, dynasty_values: dict[str, float], values_are_real: bool, idp_rankings: dict[str, dict]) -> None:
+    """Sets dynasty_value / fp_idp_rank / fp_idp_tier / value_source / rank_score
+    on a resolved player dict in place. Three-tier waterfall, each tier's
+    score range kept strictly separated so sorting is consistent regardless
+    of which source a given player landed in:
+
+      1. Real DynastyProcess $ value (offense) - score = -value (lower/better
+         for higher $).
+      2. FantasyPros IDP consensus rank (DL/LB/DB DynastyProcess doesn't
+         cover) - score = 100,000 + rank_ecr (lower/better for a lower,
+         i.e. more elite, rank).
+      3. Position + status tiering fallback, when neither source has the
+         player (e.g. kickers) - score = 1,000,000 + tier.
+    """
+    pid = p["player_id"]
+
+    if values_are_real and pid in dynasty_values:
+        p["dynasty_value"] = dynasty_values[pid]
+        p["fp_idp_rank"] = None
+        p["fp_idp_tier"] = None
+        p["value_source"] = "dynastyprocess"
+        p["rank_score"] = -dynasty_values[pid]
+        return
+
+    if pid in idp_rankings:
+        rank = idp_rankings[pid].get("rank_ecr")
+        p["dynasty_value"] = None
+        p["fp_idp_rank"] = rank
+        p["fp_idp_tier"] = idp_rankings[pid].get("tier")
+        p["value_source"] = "fantasypros_ecr"
+        p["rank_score"] = 100_000 + (rank if rank is not None else 999)
+        return
+
+    p["dynasty_value"] = None
+    p["fp_idp_rank"] = None
+    p["fp_idp_tier"] = None
+    p["value_source"] = "tiering"
+    p["rank_score"] = 1_000_000 + fallback_tier_score(p.get("position"), p.get("status"))
 
 
 def build_board_data(cfg: LeagueConfig, resolve_all_rosters: bool = True) -> BoardData:
@@ -156,12 +188,13 @@ def build_board_data(cfg: LeagueConfig, resolve_all_rosters: bool = True) -> Boa
     dynasty_values, values_are_real = fetch_dynasty_values()
     if not values_are_real:
         print("Dynasty value ranking is APPROXIMATE (position/status tiering fallback) - real source unreachable.")
+    idp_rankings, idp_are_real = fetch_idp_rankings()
 
     pool_resolved = _resolve_players(list(pool_player_ids), players)
     for p in pool_resolved:
-        p["dynasty_value"] = dynasty_values.get(p["player_id"]) if values_are_real else None
+        _apply_value_fields(p, dynasty_values, values_are_real, idp_rankings)
         p["former_team"] = pool_player_former_team.get(p["player_id"], "Unknown")
-    pool_resolved.sort(key=lambda p: _score_player(p, dynasty_values, values_are_real))
+    pool_resolved.sort(key=lambda p: p["rank_score"])
 
     # My roster
     my_roster = next((r for r in current_rosters if r.get("owner_id") == MY_USER_ID), None)
@@ -183,15 +216,15 @@ def build_board_data(cfg: LeagueConfig, resolve_all_rosters: bool = True) -> Boa
         my_ir_players = _resolve_players(list(reserve_ids), players)
 
         for p in my_active_players:
-            p["dynasty_value"] = dynasty_values.get(p["player_id"]) if values_are_real else None
+            _apply_value_fields(p, dynasty_values, values_are_real, idp_rankings)
             for fp in p.get("fantasy_positions") or ([p["position"]] if p.get("position") else []):
                 if fp in position_counts:
                     position_counts[fp] += 1
 
         cut_candidates = sorted(
             my_active_players,
-            key=lambda p: _score_player(p, dynasty_values, values_are_real),
-            reverse=True,  # worst dynasty value first = best cut candidate first
+            key=lambda p: p["rank_score"],
+            reverse=True,  # worst value first = best cut candidate first
         )
 
     position_limits, position_limits_source = _derive_position_limits(league, cfg)
@@ -208,6 +241,7 @@ def build_board_data(cfg: LeagueConfig, resolve_all_rosters: bool = True) -> Boa
         departed_orphan_roster_ids=orphan_roster_ids,
         pool=pool_resolved,
         dynasty_values_are_real=values_are_real,
+        idp_rankings_are_real=idp_are_real,
         my_roster_id=my_roster_id,
         my_active_players=my_active_players,
         my_taxi_players=my_taxi_players,

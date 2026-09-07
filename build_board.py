@@ -54,7 +54,13 @@ def main() -> int:
     if data.cut_candidates:
         print("Top 5 cut candidates:")
         for p in data.cut_candidates[:5]:
-            print(f"  {p['name']} ({p.get('position')}) - value={p.get('dynasty_value')}")
+            if p.get("dynasty_value") is not None:
+                value_str = f"${round(p['dynasty_value']):,}"
+            elif p.get("fp_idp_rank") is not None:
+                value_str = f"IDP ECR #{p['fp_idp_rank']} (Tier {p.get('fp_idp_tier')})"
+            else:
+                value_str = "no ranking data (tiering fallback)"
+            print(f"  {p['name']} ({p.get('position')}) - {value_str}")
 
     return 0
 

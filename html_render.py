@@ -14,6 +14,15 @@ from board_data import BoardData
 from config import LeagueConfig
 
 
+def _value_display(p: dict) -> str:
+    if p.get("dynasty_value") is not None:
+        return f"${round(p['dynasty_value']):,}"
+    if p.get("fp_idp_rank") is not None:
+        tier = p.get("fp_idp_tier")
+        return f"IDP ECR #{p['fp_idp_rank']}" + (f" (Tier {tier})" if tier else "")
+    return "—"  # em dash
+
+
 def _player_row(p: dict) -> dict:
     return {
         "id": p["player_id"],
@@ -23,7 +32,9 @@ def _player_row(p: dict) -> dict:
         "team": p.get("team") or "-",
         "status": p.get("status") or "-",
         "former_team": p.get("former_team", ""),
-        "value": p.get("dynasty_value"),
+        "value_display": _value_display(p),
+        "value_source": p.get("value_source", "tiering"),
+        "rank_score": p.get("rank_score", 1_000_000),
         "unresolved": p.get("unresolved", False),
     }
 
@@ -38,6 +49,7 @@ def to_json_payload(data: BoardData, cfg: LeagueConfig, live_state: dict | None 
         "budget": cfg.budget,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "dynasty_values_are_real": data.dynasty_values_are_real,
+        "idp_rankings_are_real": data.idp_rankings_are_real,
         "position_limits_source": data.position_limits_source,
         "position_limits": data.position_limits,
         "position_counts": data.position_counts,
@@ -133,7 +145,7 @@ _TEMPLATE = """<!doctype html>
         <th data-key="former_team">Former Team</th>
         <th data-key="team">NFL Team</th>
         <th data-key="status">Status</th>
-        <th data-key="value">Dynasty Value</th>
+        <th data-key="value_display" data-sort="rank_score">Value</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -146,7 +158,7 @@ _TEMPLATE = """<!doctype html>
 
     <h2>Active Roster</h2>
     <table id="activeTable">
-      <thead><tr><th data-key="name">Player</th><th data-key="position">Pos</th><th data-key="fpos">Eligibility</th><th data-key="team">NFL Team</th><th data-key="status">Status</th><th data-key="value">Dynasty Value</th></tr></thead>
+      <thead><tr><th data-key="name">Player</th><th data-key="position">Pos</th><th data-key="fpos">Eligibility</th><th data-key="team">NFL Team</th><th data-key="status">Status</th><th data-key="value_display" data-sort="rank_score">Value</th></tr></thead>
       <tbody></tbody>
     </table>
 
@@ -164,7 +176,7 @@ _TEMPLATE = """<!doctype html>
 
     <h2>Cut Candidates (lowest dynasty value first &mdash; zero open bench slots, only 2 taxi slots open)</h2>
     <table id="cutTable">
-      <thead><tr><th data-key="name">Player</th><th data-key="position">Pos</th><th data-key="fpos">Eligibility</th><th data-key="status">Status</th><th data-key="value">Dynasty Value</th></tr></thead>
+      <thead><tr><th data-key="name">Player</th><th data-key="position">Pos</th><th data-key="fpos">Eligibility</th><th data-key="status">Status</th><th data-key="value_display" data-sort="rank_score">Value</th></tr></thead>
       <tbody></tbody>
     </table>
   </section>
@@ -187,11 +199,6 @@ _TEMPLATE = """<!doctype html>
 <script>
 const DATA = __DATA_JSON__;
 
-function fmtValue(v) {
-  if (v === null || v === undefined) return "&mdash;";
-  return Math.round(v).toLocaleString();
-}
-
 function escapeHtml(s) {
   const d = document.createElement("div");
   d.textContent = s ?? "";
@@ -213,11 +220,20 @@ document.getElementById("myTeamName").textContent = DATA.my_team_name;
 document.getElementById("departedCount").textContent = DATA.departed_team_count;
 document.getElementById("generatedAt").textContent = new Date(DATA.generated_at).toLocaleString();
 
-if (!DATA.dynasty_values_are_real) {
-  const f = document.getElementById("valueFlag");
-  f.className = "flag";
-  f.textContent = "Dynasty value ranking is APPROXIMATE: real external source was unreachable when this board was built, so players are tiered by position + status (Active > Inactive) instead of an actual market value. Re-run build_board.py once network access to the value source is available for real rankings.";
-}
+(function () {
+  const notes = [];
+  if (!DATA.dynasty_values_are_real) {
+    notes.push("Offensive dynasty $ values are APPROXIMATE (DynastyProcess unreachable) - falling back to position/status tiering.");
+  }
+  if (!DATA.idp_rankings_are_real) {
+    notes.push("IDP (DL/LB/DB) rankings are APPROXIMATE (FantasyPros unreachable or no API key set) - falling back to position/status tiering instead of real ECR ranks.");
+  }
+  if (notes.length) {
+    const f = document.getElementById("valueFlag");
+    f.className = "flag";
+    f.textContent = notes.join(" ");
+  }
+})();
 
 // --- Generic sortable/filterable table renderer ---
 function renderTable(tableEl, rows, opts) {
@@ -230,7 +246,6 @@ function renderTable(tableEl, rows, opts) {
   function draw(data) {
     tbody.innerHTML = data.map(p => {
       const cells = opts.columns.map(col => {
-        if (col === "value") return `<td>${fmtValue(p.value)}</td>`;
         if (col === "name") return `<td>${escapeHtml(p.name)}${p.unresolved ? ' <span class="unresolved">(unresolved id)</span>' : ''}</td>`;
         return `<td>${escapeHtml(p[col])}</td>`;
       }).join("");
@@ -242,7 +257,7 @@ function renderTable(tableEl, rows, opts) {
   function sortRows(rows) {
     const sorted = [...rows].sort((a, b) => {
       let av = a[sortKey], bv = b[sortKey];
-      if (sortKey === "value") { av = av ?? -Infinity; bv = bv ?? -Infinity; }
+      if (sortKey === "rank_score") { av = av ?? Infinity; bv = bv ?? Infinity; }
       else { av = (av ?? "").toString().toLowerCase(); bv = (bv ?? "").toString().toLowerCase(); }
       if (av < bv) return -1 * sortDir;
       if (av > bv) return 1 * sortDir;
@@ -253,7 +268,7 @@ function renderTable(tableEl, rows, opts) {
 
   ths.forEach(th => {
     th.addEventListener("click", () => {
-      const key = th.dataset.key;
+      const key = th.dataset.sort || th.dataset.key;
       sortDir = (sortKey === key) ? -sortDir : -1;
       sortKey = key;
       draw(sortRows(opts.getRows()));
@@ -292,8 +307,8 @@ function poolRows() {
 }
 
 const poolOpts = renderTable(document.getElementById("poolTable"), DATA.pool, {
-  columns: ["name", "position", "fpos", "former_team", "team", "status", "value"],
-  defaultSort: "value", defaultDir: 1,
+  columns: ["name", "position", "fpos", "former_team", "team", "status", "value_display"],
+  defaultSort: "rank_score", defaultDir: 1,
   getRows: poolRows,
   onDraw: n => document.getElementById("poolCount").textContent = n + " players",
 });
@@ -316,8 +331,8 @@ limitsFlagEl.textContent = "Position limits source: " + DATA.position_limits_sou
 if (DATA.position_limits_source.toLowerCase().includes("assumed")) limitsFlagEl.classList.add("bad");
 
 renderTable(document.getElementById("activeTable"), DATA.my_active, {
-  columns: ["name", "position", "fpos", "team", "status", "value"],
-  defaultSort: "value", defaultDir: 1,
+  columns: ["name", "position", "fpos", "team", "status", "value_display"],
+  defaultSort: "rank_score", defaultDir: 1,
   getRows: () => DATA.my_active,
 });
 renderTable(document.getElementById("taxiTable"), DATA.my_taxi, {
@@ -329,8 +344,8 @@ renderTable(document.getElementById("irTable"), DATA.my_ir, {
   getRows: () => DATA.my_ir,
 });
 renderTable(document.getElementById("cutTable"), DATA.cut_candidates, {
-  columns: ["name", "position", "fpos", "status", "value"],
-  defaultSort: "value", defaultDir: 1,
+  columns: ["name", "position", "fpos", "status", "value_display"],
+  defaultSort: "rank_score", defaultDir: -1,
   getRows: () => DATA.cut_candidates,
 });
 
