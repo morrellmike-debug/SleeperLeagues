@@ -18,6 +18,18 @@ python3 -m venv .venv && source .venv/bin/activate   # optional but recommended
 pip install -r requirements.txt
 ```
 
+To enable real IDP rankings (DL/LB/DB - DynastyProcess only covers offense),
+add your FantasyPros API key to a `.env` file in the repo root (gitignored,
+never commit it):
+
+```
+FANTASYPROS_API_KEY=your-key-here
+```
+
+Requires a FantasyPros plan with API access (`api.fantasypros.com`). Without
+a key, IDP/K players just fall back to the position/status tiering, flagged
+as approximate in the UI - everything else still works.
+
 ## Phase 1 - build the pre-draft board
 
 ```bash
@@ -33,10 +45,13 @@ This:
 3. Unions those rosters' players into the dispersal pool.
 4. Fetches `players.json` (cached to disk under `cache/`, refreshed only if
    >24h old - it's a large payload and doesn't change intraday).
-5. Fetches dynasty trade values from DynastyProcess's public CSV to rank the
-   pool and your roster. If that source is unreachable or its columns
-   changed, it falls back to a simple position + status tiering and flags
-   the ranking as approximate directly in the UI (Pool tab banner).
+5. Fetches dynasty trade values from DynastyProcess's public CSV to rank
+   offensive players (QB/RB/WR/TE) in the pool and your roster, and IDP
+   (DL/LB/DB) consensus rankings from the FantasyPros API to cover the
+   ~half of the dispersal pool DynastyProcess doesn't price. If either
+   source is unreachable, that slice falls back to a simple position +
+   status tiering and flags the ranking as approximate directly in the UI
+   (Pool tab banner).
 6. Computes your position counts vs. the league's position limits. Sleeper
    doesn't expose a "max players per position" field in its public API, so
    this uses the limits from the spec (`QB:3, RB:6, WR:7, TE:3, K:1, DL:4,
@@ -108,8 +123,10 @@ produces the My Roster tab, just with an empty Pool tab.
 |---|---|
 | `config.py` | League IDs, budget, format, position-limit fallbacks |
 | `sleeper_api.py` | Sleeper API client + `players.json` disk cache |
-| `dynasty_values.py` | DynastyProcess CSV fetch/parse + fallback tiering |
-| `board_data.py` | Pool diffing, roster analysis, cut candidates |
+| `player_ids.py` | Shared FantasyPros-id \<-\> sleeper-id crosswalk (DynastyProcess's `db_playerids.csv`) |
+| `dynasty_values.py` | DynastyProcess CSV fetch/parse (offense values) + fallback tiering |
+| `fantasypros.py` | FantasyPros API - IDP (DL/LB/DB) consensus rankings |
+| `board_data.py` | Pool diffing, roster analysis, cut candidates, three-tier value ranking |
 | `html_render.py` | Renders the self-contained `board.html` |
 | `build_board.py` | Phase 1 CLI |
 | `live_tracker.py` | Phase 2 CLI |

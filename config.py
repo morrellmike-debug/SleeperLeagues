@@ -47,14 +47,14 @@ LEAGUES: dict[str, LeagueConfig] = {
         key="reg_cool_kids",
         name="Reg Cool Kids",
         league_id="1394438913442979840",
-        draft_id="",  # fill in once the draft is created
+        draft_id="1394438913992441856",
         format="snake",
     ),
     "chopped_cool_kids": LeagueConfig(
         key="chopped_cool_kids",
         name="Chopped Cool Kids",
         league_id="1394363458304098304",
-        draft_id="",  # fill in once the draft is created
+        draft_id="1394363459306553344",
         format="snake",
     ),
 }
@@ -82,3 +82,17 @@ DYNASTY_PROCESS_VALUES_URL = (
 DYNASTY_PROCESS_PLAYERIDS_URL = (
     "https://raw.githubusercontent.com/dynastyprocess/data/master/files/db_playerids.csv"
 )
+PLAYERIDS_CACHE_PATH = f"{CACHE_DIR}/fp_sleeper_crosswalk.json"
+PLAYERIDS_CACHE_MAX_AGE_HOURS = 24 * 7  # id crosswalk changes rarely
+
+# FantasyPros API (requires FANTASYPROS_API_KEY - see .env, never committed).
+# DynastyProcess's values-players.csv only covers offensive skill positions,
+# so we use FantasyPros' consensus IDP rankings (position=IDP: DL/LB/DB) to
+# fill that gap instead of falling all the way back to position/status
+# tiering for ~half the dispersal pool. Its player_id uses the same
+# numbering as DynastyProcess's fp_id, so it joins through the same
+# crosswalk file above.
+FANTASYPROS_BASE_URL = "https://api.fantasypros.com/public/v2/json"
+NFL_SEASON = 2026
+FANTASYPROS_IDP_CACHE_PATH = f"{CACHE_DIR}/fantasypros_idp.json"
+FANTASYPROS_CACHE_MAX_AGE_HOURS = 24

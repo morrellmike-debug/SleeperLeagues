@@ -3,3 +3,4 @@ __pycache__/
 cache/
 board.html
 live_state.json
+.env

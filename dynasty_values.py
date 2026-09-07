@@ -20,11 +20,11 @@ import requests
 
 from config import (
     CACHE_DIR,
-    DYNASTY_PROCESS_PLAYERIDS_URL,
     DYNASTY_PROCESS_VALUES_URL,
     DYNASTY_VALUES_CACHE_MAX_AGE_HOURS,
     DYNASTY_VALUES_CACHE_PATH,
 )
+from player_ids import fetch_fp_id_to_sleeper_id
 
 
 def _find_column(fieldnames: list[str], *substrings: str) -> str | None:
@@ -94,25 +94,14 @@ def fetch_dynasty_values(force_refresh: bool = False) -> tuple[dict[str, float],
                     fp_id_to_value[fpid] = val
 
         if not sleeper_id_to_value and fp_id_to_value:
-            # Join through the id crosswalk file: fantasypros_id -> sleeper_id
-            ids_resp = requests.get(DYNASTY_PROCESS_PLAYERIDS_URL, timeout=30)
-            ids_resp.raise_for_status()
-            ids_reader = csv.DictReader(io.StringIO(ids_resp.text))
-            ids_fields = ids_reader.fieldnames or []
-            fp_col = _find_column(ids_fields, "fantasypros", "id")
-            sleeper_col = _find_column(ids_fields, "sleeper", "id")
-
-            if not fp_col or not sleeper_col:
-                print(f"WARNING: could not find id columns in db_playerids.csv (saw: {ids_fields}). Falling back to tiering.")
+            fp_to_sleeper = fetch_fp_id_to_sleeper_id()
+            if not fp_to_sleeper:
+                print("WARNING: id crosswalk unavailable. Falling back to tiering.")
                 return {}, False
-
-            for row in ids_reader:
-                fpid = (row.get(fp_col) or "").strip()
-                sid = (row.get(sleeper_col) or "").strip()
-                if not fpid or not sid or fpid.upper() == "NA" or sid.upper() == "NA":
-                    continue
-                if fpid in fp_id_to_value:
-                    sleeper_id_to_value[sid] = fp_id_to_value[fpid]
+            for fpid, val in fp_id_to_value.items():
+                sid = fp_to_sleeper.get(fpid)
+                if sid:
+                    sleeper_id_to_value[sid] = val
 
         if not sleeper_id_to_value:
             print("WARNING: DynastyProcess data parsed but yielded no sleeper_id-keyed values. Falling back to tiering.")
