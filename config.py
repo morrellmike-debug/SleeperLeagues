@@ -47,14 +47,14 @@ LEAGUES: dict[str, LeagueConfig] = {
         key="reg_cool_kids",
         name="Reg Cool Kids",
         league_id="1394438913442979840",
-        draft_id="",  # fill in once the draft is created
+        draft_id="1394438913992441856",
         format="snake",
     ),
     "chopped_cool_kids": LeagueConfig(
         key="chopped_cool_kids",
         name="Chopped Cool Kids",
         league_id="1394363458304098304",
-        draft_id="",  # fill in once the draft is created
+        draft_id="1394363459306553344",
         format="snake",
     ),
 }
